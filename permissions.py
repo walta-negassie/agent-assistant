@@ -22,6 +22,7 @@ TOOL_RISK_LEVELS = {
     "get_current_time": RiskLevel.SAFE,
     "list_events": RiskLevel.SAFE,
     "create_event": RiskLevel.SENSITIVE,
+    "create_draft": RiskLevel.SENSITIVE,
 }
 
 

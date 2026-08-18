@@ -9,7 +9,7 @@ import ollama
 import permissions
 from datetime import datetime
 
-from tools import time_tool, calendar_tool
+from tools import time_tool, calendar_tool, email_tool
 
 MODEL = "qwen2.5:3b"
 
@@ -17,12 +17,14 @@ TOOLS = [
     time_tool.SCHEMA,
     calendar_tool.LIST_EVENTS_SCHEMA,
     calendar_tool.CREATE_EVENT_SCHEMA,
+    email_tool.CREATE_DRAFT_SCHEMA,
 ]
 
 AVAILABLE_FUNCTIONS = {
     "get_current_time": time_tool.get_current_time,
     "list_events": calendar_tool.list_events,
     "create_event": calendar_tool.create_event,
+    "create_draft": email_tool.create_draft,
 }
 
 
@@ -103,4 +105,4 @@ def run_agent(user_message: str):
 
 
 if __name__ == "__main__":
-    run_agent("Schedule a test event called 'Agent Project Test' tomorrow from 2pm to 2:30pm.")
+    run_agent("Draft an email to test@example.com with subject 'Test' saying hello and that this is a test of my agent project.")
