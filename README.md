@@ -80,6 +80,17 @@ Every real API call (Google Calendar, Gmail, Todoist) is wrapped in `retry.py`'s
 
 Every tool function catches these and returns a clean error string instead of crashing, so a failure becomes a normal `tool` message the model can see and explain to the user in plain language — rather than an unhandled exception taking down the whole agent.
 
+## Tests
+
+```bash
+pytest tests/ -v
+```
+
+22 tests covering the two subsystems where a silent regression would actually matter:
+
+- **`tests/test_permissions.py`** — every registered tool has the correct risk tier, SAFE tools skip confirmation, SENSITIVE/DANGEROUS tools require it, and unregistered tools correctly default to DANGEROUS (the fail-safe guarantee).
+- **`tests/test_retry.py`** — HTTP status codes are classified correctly (429/5xx → retry, 4xx → fail fast), retries actually happen with the right count, and permanent errors fail immediately without wasting attempts. Uses fake functions instead of real API calls, so the suite runs instantly and has no network dependency.
+
 ### Prerequisites
 - Python 3.10+
 - [Ollama](https://ollama.com) installed
