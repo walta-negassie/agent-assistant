@@ -1,62 +1,79 @@
 # Agent Assistant
 
-A personal AI agent that takes natural language requests and performs real actions — creating calendar events, (soon) drafting emails, (soon) managing tasks — using a local, free LLM with a custom tool-calling loop and a permissions layer.
+A personal AI agent that takes natural language requests and performs real actions — creating calendar events, drafting emails, managing tasks — using a local, free LLM with a custom tool-calling loop and a permissions layer.
 
-Built as a hands-on project to learn real agent engineering: tool-call orchestration, permission boundaries, OAuth integration, and error handling — not just prompting an LLM.
+Built as a hands-on project to learn real agent engineering: tool-call orchestration, permission boundaries, OAuth and API-key integration, and error handling — not just prompting an LLM.
 
-**Runs entirely free.** No API keys with billing, no cloud LLM costs. Uses a local model via [Ollama](https://ollama.com) and free-tier Google APIs.
+**Runs entirely free.** No API keys with billing, no cloud LLM costs. Uses a local model via [Ollama](https://ollama.com) and free-tier Google and Todoist APIs.
 
 ## What it does right now
 
-- Understands natural language requests via a local LLM (Qwen2.5 3B, run through Ollama)
-- Decides which tool(s) to call and with what arguments
-- Executes real actions against Google Calendar:
-  - `list_events` — read upcoming events (read-only)
-  - `create_event` — create a new event (writes to your real calendar)
-- Every tool call passes through a permissions layer before executing
+Understands natural language requests via a local LLM (Qwen2.5 3B, run through Ollama), decides which tool(s) to call, and executes real actions:
+
+| Tool | Service | Risk tier | What it does |
+|---|---|---|---|
+| `get_current_time` | — | SAFE | Returns the real system date/time |
+| `list_events` | Google Calendar | SAFE | Reads upcoming events |
+| `create_event` | Google Calendar | SENSITIVE | Creates a real calendar event |
+| `create_draft` | Gmail | SENSITIVE | Creates a draft (never auto-sends) |
+| `list_tasks` | Todoist | SAFE | Reads open tasks |
+| `create_task` | Todoist | SENSITIVE | Creates a real task |
+
+Every tool call passes through a permissions layer before executing.
 
 ## Architecture
-User message
-│
-▼
-agent.py (core loop)
-│
-├─▶ sends message + tool schemas to local model (Ollama)
-│
-├─▶ model responds, optionally requesting a tool call
-│
-├─▶ permissions.py checks the tool's risk level
-│ SAFE → runs automatically
-│ SENSITIVE → prompts user for y/n confirmation
-│ DANGEROUS → prompts user for y/n confirmation
-│ (unregistered → treated as DANGEROUS by default — fail safe)
-│
-├─▶ if approved, tools/*.py executes the real action
-│ (e.g. tools/calendar_tool.py hits the real Google Calendar API)
-│
-├─▶ result is sent back to the model
-│
-└─▶ model produces a final natural-language answer
 
+```
+User message
+    │
+    ▼
+agent.py (core loop)
+    │
+    ├─▶ system prompt grounds the model with the real current date
+    │
+    ├─▶ sends message + tool schemas to local model (Ollama)
+    │
+    ├─▶ model responds, optionally requesting a tool call
+    │
+    ├─▶ permissions.py checks the tool's risk level
+    │       SAFE        → runs automatically
+    │       SENSITIVE    → prompts user for y/n confirmation
+    │       DANGEROUS     → prompts user for y/n confirmation
+    │       (unregistered → treated as DANGEROUS by default — fail safe)
+    │
+    ├─▶ if approved, tools/*.py executes the real action
+    │       (Google Calendar API, Gmail API, or Todoist API)
+    │
+    ├─▶ result is sent back to the model
+    │
+    └─▶ model produces a final natural-language answer
+```
 
 ### Why a permissions layer
 
-The model never gets to decide how risky its own action is — that's hardcoded by the developer, per tool, in `permissions.py`. Read-only actions (like listing events) run automatically. Anything that changes real state (creating a calendar event, later: sending an email) requires the user to explicitly approve it before it executes. Unregistered tools default to the highest risk tier, so a bug or oversight can't accidentally let something risky run silently.
+The model never gets to decide how risky its own action is — that's hardcoded by the developer, per tool, in `permissions.py`. Read-only actions (listing events, listing tasks) run automatically. Anything that changes real state (creating an event, drafting an email, creating a task) requires explicit user approval before it executes. Unregistered tools default to the highest risk tier, so a bug or oversight can't accidentally let something risky run silently.
 
-## A real bug I caught and fixed
+Email is deliberately draft-only for now — `create_draft` writes to the Gmail Drafts folder but never sends. Sending is a DANGEROUS, irreversible action and is planned as a separate, more heavily-gated tool.
 
-Early on, I asked the agent to "schedule a test event tomorrow." It called `create_event` with a start date of `2023-11-28` — a fully hallucinated date, since the local model has no built-in awareness of the actual current date. The event was created for real, in the past, in my actual calendar.
+## Real bugs I found and fixed
 
-**Fix:** every request now includes a system prompt that explicitly states the real current date (pulled from the system clock, not the model's guess) and instructs the model to compute relative dates like "tomorrow" from that ground truth. I also added an explicit instruction not to claim an action succeeded unless it was backed by an actual tool result — since I separately observed the model claiming it "used a multiply function" that didn't exist.
+Building this surfaced three genuine engineering problems, not just typos:
 
-This is why every tool call is logged to the console (`[TOOL CALL]` / `[TOOL RESULT]`) — so incorrect model behavior is visible immediately instead of hidden inside a plausible-sounding sentence.
+**1. Hallucinated dates.** Early on, "schedule a test event tomorrow" produced a start date of `2023-11-28` — the local model has no built-in awareness of the actual current date and simply guessed. The event was created for real, in the past. **Fix:** every request now includes a system prompt stating the real current date pulled from the system clock, with explicit instructions to compute relative dates from that ground truth — and to never claim an action succeeded without a real tool result backing it up.
+
+**2. A leaked OAuth token in git history.** A stray typo in `.gitignore` (`token.json.DS_Store` instead of two separate lines) caused `token.json` to be silently tracked and committed. GitHub's push protection caught it before the push succeeded. **Fix:** corrected `.gitignore`, ran `git rm --cached` to untrack the file, and amended the commit before it was ever visible publicly.
+
+**3. A breaking third-party API migration.** Todoist retired their REST v2 API mid-project, returning `410 Gone` on every request. Once switched to the new `api/v1` endpoint, task creation worked but `list_tasks` still broke — the new API wraps results in `{"results": [...], "next_cursor": ...}` instead of returning a bare list, while single-resource endpoints (like creating one task) still return the resource directly. **Fix:** updated the base URL and unwrapped the paginated response correctly, after inspecting the raw response instead of guessing at the fix.
+
+Every tool call is logged to the console (`[TOOL CALL]` / `[TOOL RESULT]`) specifically so issues like these are visible immediately instead of hidden inside a plausible-sounding final answer.
 
 ## Setup
 
 ### Prerequisites
 - Python 3.10+
 - [Ollama](https://ollama.com) installed
-- A free Google Cloud project with the Calendar API enabled (see below)
+- A free Google Cloud project with Calendar + Gmail APIs enabled
+- A free Todoist account
 
 ### 1. Clone and install
 ```bash
@@ -73,36 +90,45 @@ ollama pull qwen2.5:3b
 ollama serve   # keep running in a separate terminal tab
 ```
 
-### 3. Google Calendar API access
+### 3. Google Calendar + Gmail API access
 1. Create a project at [console.cloud.google.com](https://console.cloud.google.com)
-2. Enable the **Google Calendar API**
+2. Enable the **Google Calendar API** and **Gmail API**
 3. Configure the OAuth consent screen (External, add yourself as a test user)
 4. Create OAuth credentials (Desktop app type), download the JSON
-5. Save it as `credentials.json` in the project root (already gitignored — never commit this file)
+5. Save it as `credentials.json` in the project root (gitignored — never commit this file)
+6. First run opens a browser to authorize both calendar and Gmail (`gmail.compose`) scopes. A `token.json` is cached locally afterward (also gitignored).
 
-### 4. Run it
+### 4. Todoist API access
+1. Sign up at [todoist.com](https://todoist.com) (free plan, no card required)
+2. Settings → Integrations → Developer → copy your API token
+3. Create a `.env` file in the project root:
+   ```
+   TODOIST_API_TOKEN=your_actual_token_here
+   ```
+
+### 5. Run it
 ```bash
 python3 agent.py
 ```
 
-First run opens a browser to authorize calendar access. After that, a `token.json` is cached locally (also gitignored) so you won't need to re-authorize.
-
 ## Project structure
 
+```
 agent-assistant/
-├── agent.py # core agent loop
-├── permissions.py # risk-tiered permission checks
+├── agent.py              # core agent loop
+├── permissions.py         # risk-tiered permission checks
 ├── tools/
-│ ├── time_tool.py # get_current_time (SAFE)
-│ └── calendar_tool.py # list_events (SAFE), create_event (SENSITIVE)
+│   ├── time_tool.py       # get_current_time (SAFE)
+│   ├── calendar_tool.py   # list_events (SAFE), create_event (SENSITIVE)
+│   ├── email_tool.py      # create_draft (SENSITIVE)
+│   └── tasks_tool.py      # list_tasks (SAFE), create_task (SENSITIVE)
 ├── requirements.txt
 └── README.md
-
+```
 
 ## What's next
-- Gmail integration — draft emails (SENSITIVE), send emails (DANGEROUS)
-- Task tracker integration (Todoist)
-- Multi-step planning (e.g. "find a free slot tomorrow and schedule X, then email Y")
-- Retry/backoff for transient API failures, structured logging of every tool call
+- Sending emails (DANGEROUS tier, extra confirmation friction)
+- Multi-step planning (e.g. "find a free slot tomorrow, schedule X, then email Y")
+- Retry/backoff for transient API failures (rate limits, timeouts)
+- Structured logging of every tool call to a file, for auditability
 - Simple CLI or web front end
-
