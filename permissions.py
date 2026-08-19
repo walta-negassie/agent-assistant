@@ -23,6 +23,8 @@ TOOL_RISK_LEVELS = {
     "list_events": RiskLevel.SAFE,
     "create_event": RiskLevel.SENSITIVE,
     "create_draft": RiskLevel.SENSITIVE,
+    "list_tasks": RiskLevel.SAFE,
+    "create_task": RiskLevel.SENSITIVE,
 }
 
 
