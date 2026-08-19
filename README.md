@@ -53,8 +53,7 @@ agent.py (core loop)
 
 The model never gets to decide how risky its own action is — that's hardcoded by the developer, per tool, in `permissions.py`. Read-only actions (listing events, listing tasks) run automatically. Anything that changes real state (creating an event, drafting an email, creating a task) requires explicit user approval before it executes. Unregistered tools default to the highest risk tier, so a bug or oversight can't accidentally let something risky run silently.
 
-Email is deliberately draft-only for now — `create_draft` writes to the Gmail Drafts folder but never sends. Sending is a DANGEROUS, irreversible action and is planned as a separate, more heavily-gated tool.
-
+Email is deliberately draft-only. Sending is irreversible — once it leaves the account, it's seen and can't be undone — unlike every other action in this project, which is either read-only or easily reversed (delete the event, delete the task, delete the draft). I considered adding a `send_email` tool but decided against it: the value it adds (skipping one manual click in Gmail) doesn't outweigh the risk of an agent mistake, like the hallucinated-date or fabricated-data bugs already found in this project, becoming permanent and external the instant it happens instead of being caught before the user hits send.
 ## Real bugs I found and fixed
 
 Building this surfaced three genuine engineering problems, not just typos:
