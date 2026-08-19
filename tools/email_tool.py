@@ -14,6 +14,7 @@ from email.mime.text import MIMEText
 
 from tools.calendar_tool import _get_credentials
 from googleapiclient.discovery import build
+from retry import with_retry
 
 
 def _get_gmail_service():
@@ -21,11 +22,7 @@ def _get_gmail_service():
     return build("gmail", "v1", credentials=creds)
 
 
-def create_draft(to: str, subject: str, body: str):
-    """
-    Creates a Gmail draft. Does not send it — the user must open Gmail
-    and send it manually. This keeps the action reversible.
-    """
+def _do_create_draft(to: str, subject: str, body: str):
     service = _get_gmail_service()
 
     message = MIMEText(body)
@@ -34,12 +31,22 @@ def create_draft(to: str, subject: str, body: str):
 
     raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
 
-    draft = (
+    return (
         service.users()
         .drafts()
         .create(userId="me", body={"message": {"raw": raw_message}})
         .execute()
     )
+
+def create_draft(to: str, subject: str, body: str):
+    """
+    Creates a Gmail draft. Does not send it — the user must open Gmail
+    and send it manually. This keeps the action reversible.
+    """
+    try:
+        draft = with_retry(_do_create_draft, to, subject, body)
+    except Exception as e:
+        return f"Error: could not create draft ({e})"
 
     return f"Draft created (id: {draft['id']}). Open Gmail to review and send it."
 

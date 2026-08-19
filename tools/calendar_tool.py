@@ -15,6 +15,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from retry import with_retry
 
 # If you ever change SCOPES, delete token.json and re-authenticate.
 SCOPES = [
@@ -50,12 +51,11 @@ def _get_service():
     return build("calendar", "v3", credentials=creds)
 
 
-def list_events(max_results: int = 10):
-    """Lists the next upcoming events on the user's primary calendar."""
+def _do_list_events(max_results: int):
     service = _get_service()
     now = datetime.datetime.utcnow().isoformat() + "Z"
 
-    events_result = (
+    return (
         service.events()
         .list(
             calendarId="primary",
@@ -66,8 +66,15 @@ def list_events(max_results: int = 10):
         )
         .execute()
     )
-    events = events_result.get("items", [])
 
+def list_events(max_results: int = 10):
+    """Lists the next upcoming events on the user's primary calendar."""
+    try:
+        events_result = with_retry(_do_list_events, max_results)
+    except Exception as e:
+        return f"Error: could not fetch calendar events ({e})"
+
+    events = events_result.get("items", [])
     if not events:
         return "No upcoming events found."
 
@@ -79,21 +86,28 @@ def list_events(max_results: int = 10):
     return "\n".join(lines)
 
 
-def create_event(summary: str, start_time: str, end_time: str, description: str = ""):
-    """
-    Creates a calendar event.
-    start_time and end_time must be ISO 8601, e.g. '2026-08-20T15:00:00'
-    """
+def _do_create_event(summary: str, start_time: str, end_time: str, description: str):
     service = _get_service()
-
     event_body = {
         "summary": summary,
         "description": description,
         "start": {"dateTime": start_time, "timeZone": "America/Chicago"},
         "end": {"dateTime": end_time, "timeZone": "America/Chicago"},
     }
+    return service.events().insert(calendarId="primary", body=event_body).execute()
 
-    created_event = service.events().insert(calendarId="primary", body=event_body).execute()
+def create_event(summary: str, start_time: str, end_time: str, description: str = ""):
+    """
+    Creates a calendar event.
+    start_time and end_time must be ISO 8601, e.g. '2026-08-20T15:00:00'
+    """
+    try:
+        created_event = with_retry(
+            _do_create_event, summary, start_time, end_time, description
+        )
+    except Exception as e:
+        return f"Error: could not create calendar event ({e})"
+
     return f"Event created: {created_event.get('htmlLink')}"
 
 

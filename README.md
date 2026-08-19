@@ -68,7 +68,17 @@ Building this surfaced three genuine engineering problems, not just typos:
 **4. Speculative tool-call batching with fabricated data.** When I built multi-step tool chaining (e.g. "check my calendar, then create a task using the exact event title"), the model would sometimes return *two* tool calls in a single response — `list_events` and `create_task` together — before it had actually seen the calendar result. With no real data yet, it filled the task content with literal unresolved template syntax (`{{next_event_title}}`), sent that to the real Todoist API, and then told me it had created a task with the correct event title — a hallucinated success claim that directly contradicted its own tool result. **Fix:** changed the agent loop to execute only one tool call per step, forcing the model to see each real result before it's allowed to decide on its next action, and tightened the system prompt to require exact values from tool results rather than paraphrased or placeholder text.
 
 Every tool call is logged to the console (`[STEP N] [TOOL CALL]` / `[TOOL RESULT]`) specifically so issues like these are visible immediately instead of hidden inside a plausible-sounding final answer.
-## Setup
+
+**5. Retry logic silently failing to catch its own custom exceptions.** While building `retry.py`, I wrote a `with_retry()` wrapper that classifies errors as retryable (`TransientError`) or not (`PermanentError`). Testing it with a function that raises `TransientError` directly (not wrapped in an HTTP exception) crashed immediately instead of retrying — the `except` clauses only covered `requests`-derived exceptions, not the module's own exception types. **Fix:** added an explicit `except TransientError` clause, then verified with a standalone test script that intentionally fails twice before succeeding, confirming the correct exponential backoff (1s, 2s) and eventual success.
+
+## Error handling
+
+Every real API call (Google Calendar, Gmail, Todoist) is wrapped in `retry.py`'s `with_retry()`, which classifies failures into two categories:
+
+- **Transient** (rate limits, 5xx server errors, network/timeout issues) — retried automatically up to 3 times with exponential backoff (1s, 2s, 4s)
+- **Permanent** (bad auth, malformed requests, not found) — fails immediately, since retrying can't fix these
+
+Every tool function catches these and returns a clean error string instead of crashing, so a failure becomes a normal `tool` message the model can see and explain to the user in plain language — rather than an unhandled exception taking down the whole agent.
 
 ### Prerequisites
 - Python 3.10+
@@ -118,6 +128,7 @@ python3 agent.py
 agent-assistant/
 ├── agent.py              # core agent loop
 ├── permissions.py         # risk-tiered permission checks
+├── retry.py               # retry/backoff logic and error classification
 ├── tools/
 │   ├── time_tool.py       # get_current_time (SAFE)
 │   ├── calendar_tool.py   # list_events (SAFE), create_event (SENSITIVE)

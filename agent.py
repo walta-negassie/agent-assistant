@@ -101,4 +101,4 @@ def run_agent(user_message: str, max_steps: int = 5):
     return "I wasn't able to complete this in the allotted steps."
     
 if __name__ == "__main__":
-    run_agent("Check my calendar, then create a task whose name includes the exact title of my next event.")
+    run_agent("Draft an email to test@example.com saying hi, subject 'Retry Test'.")

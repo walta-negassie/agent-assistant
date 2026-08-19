@@ -9,6 +9,7 @@ Two tools:
 import os
 import requests
 from dotenv import load_dotenv
+from retry import with_retry
 
 load_dotenv()  # reads .env into environment variables
 
@@ -20,32 +21,44 @@ def _headers():
     return {"Authorization": f"Bearer {TODOIST_API_TOKEN}"}
 
 
-def list_tasks():
-    """Lists the user's current open tasks."""
+def _do_list_tasks():
     response = requests.get(f"{BASE_URL}/tasks", headers=_headers())
     response.raise_for_status()
-    data = response.json()
-    tasks = data.get("results", [])
+    return response.json()
 
+def list_tasks():
+    """Lists the user's current open tasks."""
+    try:
+        data = with_retry(_do_list_tasks)
+    except Exception as e:
+        return f"Error: could not fetch tasks ({e})"
+
+    tasks = data.get("results", [])
     if not tasks:
         return "No open tasks found."
 
     lines = [f"- {task['content']}" for task in tasks]
     return "\n".join(lines)
-
-
-def create_task(content: str, due_string: str = None):
-    """
-    Creates a new task.
-    due_string is natural language, e.g. 'tomorrow', 'next Monday' — Todoist parses it.
-    """
+ 
+    
+def _do_create_task(content: str, due_string: str = None):
     payload = {"content": content}
     if due_string:
         payload["due_string"] = due_string
 
     response = requests.post(f"{BASE_URL}/tasks", headers=_headers(), json=payload)
     response.raise_for_status()
-    task = response.json()
+    return response.json()
+
+def create_task(content: str, due_string: str = None):
+    """
+    Creates a new task.
+    due_string is natural language, e.g. 'tomorrow', 'next Monday' — Todoist parses it.
+    """
+    try:
+        task = with_retry(_do_create_task, content, due_string=due_string)
+    except Exception as e:
+        return f"Error: could not create task ({e})"
 
     return f"Task created: '{task['content']}' (id: {task['id']})"
 
