@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Agent Assistant</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #f5f5f7;
+    margin: 0;
+    display: flex;
+    justify-content: center;
+  }
+  #app {
+    width: 100%;
+    max-width: 640px;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    padding: 16px 20px;
+    background: #1a1a2e;
+    color: white;
+    font-weight: 600;
+    font-size: 16px;
+  }
+  #messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .msg {
+    max-width: 80%;
+    padding: 10px 14px;
+    border-radius: 14px;
+    line-height: 1.4;
+    white-space: pre-wrap;
+  }
+  .user {
+    align-self: flex-end;
+    background: #1a1a2e;
+    color: white;
+  }
+  .agent {
+    align-self: flex-start;
+    background: white;
+    border: 1px solid #e0e0e0;
+  }
+  .system {
+    align-self: center;
+    color: #888;
+    font-size: 13px;
+  }
+  #confirm-box {
+    align-self: flex-start;
+    background: #fff8e1;
+    border: 1px solid #f0c14b;
+    border-radius: 14px;
+    padding: 12px 14px;
+    max-width: 85%;
+  }
+  #confirm-box .actions {
+    margin-top: 8px;
+    display: flex;
+    gap: 8px;
+  }
+  #confirm-box button {
+    padding: 6px 14px;
+    border-radius: 8px;
+    border: none;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  #allow-btn { background: #2e7d32; color: white; }
+  #deny-btn { background: #c62828; color: white; }
+  #input-row {
+    display: flex;
+    padding: 14px 20px;
+    gap: 8px;
+    border-top: 1px solid #e0e0e0;
+    background: white;
+  }
+  #input-row input {
+    flex: 1;
+    padding: 10px 14px;
+    border-radius: 10px;
+    border: 1px solid #ccc;
+    font-size: 14px;
+  }
+  #input-row button {
+    padding: 10px 18px;
+    border-radius: 10px;
+    border: none;
+    background: #1a1a2e;
+    color: white;
+    cursor: pointer;
+  }
+  #input-row button:disabled {
+    background: #999;
+    cursor: not-allowed;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>Agent Assistant</header>
+  <div id="messages"></div>
+  <div id="input-row">
+    <input id="input" type="text" placeholder="Type a request..." autofocus>
+    <button id="send-btn">Send</button>
+  </div>
+</div>
+
+<script>
+const sessionId = crypto.randomUUID();
+const messagesEl = document.getElementById("messages");
+const inputEl = document.getElementById("input");
+const sendBtn = document.getElementById("send-btn");
+
+const API_BASE = "http://localhost:8000";
+
+function addMessage(text, cls) {
+  const div = document.createElement("div");
+  div.className = "msg " + cls;
+  div.textContent = text;
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return div;
+}
+
+function addConfirmBox(toolName, toolArgs) {
+  const box = document.createElement("div");
+  box.id = "confirm-box";
+  box.innerHTML = `
+    <div><strong>⚠️ Permission needed:</strong> ${toolName}</div>
+    <div style="font-size:13px;color:#555;margin-top:4px;">${JSON.stringify(toolArgs)}</div>
+    <div class="actions">
+      <button id="allow-btn">Allow</button>
+      <button id="deny-btn">Deny</button>
+    </div>
+  `;
+  messagesEl.appendChild(box);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+
+  document.getElementById("allow-btn").onclick = () => respondConfirm(true, box);
+  document.getElementById("deny-btn").onclick = () => respondConfirm(false, box);
+}
+
+async function respondConfirm(approved, box) {
+  box.remove();
+  setLoading(true);
+  const res = await fetch(`${API_BASE}/confirm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, approved }),
+  });
+  const data = await res.json();
+  handleResult(data);
+}
+
+function handleResult(data) {
+  setLoading(false);
+  if (data.status === "confirm") {
+    addConfirmBox(data.tool_name, data.tool_args);
+  } else if (data.status === "final") {
+    addMessage(data.text, "agent");
+  } else {
+    addMessage("Error: " + (data.text || "unknown error"), "system");
+  }
+}
+
+function setLoading(isLoading) {
+  sendBtn.disabled = isLoading;
+  inputEl.disabled = isLoading;
+}
+
+async function sendMessage() {
+  const text = inputEl.value.trim();
+  if (!text) return;
+
+  addMessage(text, "user");
+  inputEl.value = "";
+  setLoading(true);
+
+  try {
+    const res = await fetch(`${API_BASE}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, message: text }),
+    });
+    const data = await res.json();
+    handleResult(data);
+  } catch (err) {
+    setLoading(false);
+    addMessage("Could not reach the agent server. Is it running?", "system");
+  }
+}
+
+sendBtn.addEventListener("click", sendMessage);
+inputEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") sendMessage();
+});
+</script>
+</body>
+</html>

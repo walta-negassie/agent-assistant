@@ -71,6 +71,8 @@ Every tool call is logged to the console (`[STEP N] [TOOL CALL]` / `[TOOL RESULT
 
 **5. Retry logic silently failing to catch its own custom exceptions.** While building `retry.py`, I wrote a `with_retry()` wrapper that classifies errors as retryable (`TransientError`) or not (`PermanentError`). Testing it with a function that raises `TransientError` directly (not wrapped in an HTTP exception) crashed immediately instead of retrying — the `except` clauses only covered `requests`-derived exceptions, not the module's own exception types. **Fix:** added an explicit `except TransientError` clause, then verified with a standalone test script that intentionally fails twice before succeeding, confirming the correct exponential backoff (1s, 2s) and eventual success.
 
+**6. Fabricated data in the final answer.** After building the web UI, testing `create_task` end-to-end revealed the model inventing a fake URL (`https://tasktracker.example.com/tasks?id=...`) and presenting it as a real, clickable link — even though the actual tool result was a plain string with no URL at all (`Task created: 'X' (id: 6hHwwCgx2X8m5Cgm)`). This happened despite an existing instruction to use exact tool-result values; that instruction wasn't strong enough to stop outright fabrication of details the tool never provided in the first place. **Fix:** added an explicit instruction never to invent URLs, links, IDs, or any other data not present in a tool result. Verified the fix by re-running the same request and confirming the response only referenced the real task ID.
+
 ## Error handling
 
 Every real API call (Google Calendar, Gmail, Todoist) is wrapped in `retry.py`'s `with_retry()`, which classifies failures into two categories:
@@ -90,6 +92,22 @@ pytest tests/ -v
 
 - **`tests/test_permissions.py`** — every registered tool has the correct risk tier, SAFE tools skip confirmation, SENSITIVE/DANGEROUS tools require it, and unregistered tools correctly default to DANGEROUS (the fail-safe guarantee).
 - **`tests/test_retry.py`** — HTTP status codes are classified correctly (429/5xx → retry, 4xx → fail fast), retries actually happen with the right count, and permanent errors fail immediately without wasting attempts. Uses fake functions instead of real API calls, so the suite runs instantly and has no network dependency.
+
+## Web UI
+
+A browser-based chat interface, built on top of the same `agent_core.py` used by the CLI — no logic is duplicated between them.
+
+```bash
+# Terminal 1
+ollama serve
+
+# Terminal 2
+uvicorn server:app --reload --port 8000
+```
+
+Then open `http://localhost:8000`. Sensitive/dangerous tool calls show an Allow/Deny confirmation card in the browser instead of a terminal `y/n` prompt — the underlying permission logic is identical, just fronted by a different interface.
+
+**Architecture note:** `agent_core.py` exposes a pause/resume-capable version of the agent loop (`advance()` and `resolve_confirmation()`), instead of blocking on `input()` like the original single-file script did. This was necessary because a web server can't pause execution to wait on a terminal prompt — the pending action has to be returned to the caller, held in session state, and resumed via a separate request once the user responds. Both `main.py` (CLI) and `server.py` (web) are thin wrappers around this same shared core.
 
 ### Prerequisites
 - Python 3.10+
@@ -137,7 +155,7 @@ python3 agent.py
 
 ```
 agent-assistant/
-├── agent.py              # core agent loop
+├── agent.py               # core agent loop
 ├── permissions.py         # risk-tiered permission checks
 ├── retry.py               # retry/backoff logic and error classification
 ├── tools/
@@ -145,6 +163,11 @@ agent-assistant/
 │   ├── calendar_tool.py   # list_events (SAFE), create_event (SENSITIVE)
 │   ├── email_tool.py      # create_draft (SENSITIVE)
 │   └── tasks_tool.py      # list_tasks (SAFE), create_task (SENSITIVE)
+├── agent_core.py          # shared agent loop (pause/resume), used by both CLI and web
+├── main.py                # interactive CLI chat
+├── server.py              # FastAPI backend for the web UI
+├── static/
+│   └── index.html         # browser chat interface
 ├── requirements.txt
 └── README.md
 ```
