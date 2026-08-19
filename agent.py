@@ -32,16 +32,19 @@ AVAILABLE_FUNCTIONS = {
 }
 
 
-def run_agent(user_message: str):
+def run_agent(user_message: str, max_steps: int = 5):
     today = datetime.now().strftime("%A, %B %d, %Y")
 
     system_prompt = (
-        f"You are a helpful personal assistant with access to tools. "
-        f"Today's date is {today}. Use this as ground truth for anything "
-        f"involving relative dates like 'tomorrow' or 'next week'. "
         f"Only claim to have done something if you actually called a tool "
         f"and received a real result — never say an action succeeded without "
-        f"tool evidence."
+        f"tool evidence. When describing what a tool did, use the EXACT "
+        f"values from the tool result — never paraphrase, guess, or use "
+        f"placeholder text. You may call multiple tools, one after another, "
+        f"if completing the user's request requires it — for example, "
+        f"checking a calendar before creating an event. Call only ONE tool "
+        f"at a time, and wait to see its real result before deciding on "
+        f"your next action."
     )
 
     messages = [
@@ -51,31 +54,28 @@ def run_agent(user_message: str):
 
     print(f"\n[USER] {user_message}")
 
-    # Step 1: send the message + available tools to the model
-    response = ollama.chat(
-        model=MODEL,
-        messages=messages,
-        tools=TOOLS,
-    )
+    for step in range(max_steps):
+        response = ollama.chat(model=MODEL, messages=messages, tools=TOOLS)
+        ai_message = response["message"]
+        messages.append(ai_message)
 
-    ai_message = response["message"]
-    messages.append(ai_message)
+        tool_calls = ai_message.get("tool_calls")
 
-    # Step 2: did the model decide to call a tool?
-    tool_calls = ai_message.get("tool_calls")
+        if not tool_calls:
+            # Model is done — no more tools needed, this is the final answer
+            print(f"[AGENT] {ai_message['content']}")
+            return ai_message["content"]
 
-    if not tool_calls:
-        print(f"[AGENT] {ai_message['content']}")
-        return ai_message["content"]
-
-    # Step 3: execute each requested tool call, through the permissions layer
-    for call in tool_calls:
+        # Only execute ONE tool call per step, even if the model requested
+        # several — this forces true sequential reasoning: the model must
+        # see each real result before deciding on its next action, instead
+        # of speculatively queuing multiple calls before any data exists.
+        call = tool_calls[0]
         tool_name = call["function"]["name"]
-        tool_args = call["function"]["arguments"]  # dict of arguments
+        tool_args = call["function"]["arguments"]
 
-        print(f"[TOOL CALL] {tool_name}({tool_args})")
+        print(f"[STEP {step + 1}] [TOOL CALL] {tool_name}({tool_args})")
 
-        # Check permissions BEFORE running anything
         if permissions.requires_confirmation(tool_name):
             approved = permissions.ask_user_confirmation(tool_name, tool_args)
             if not approved:
@@ -90,23 +90,15 @@ def run_agent(user_message: str):
         else:
             result = function_to_call(**tool_args)
 
-        print(f"[TOOL RESULT] {result}")
+        print(f"[STEP {step + 1}] [TOOL RESULT] {result}")
+        messages.append({"role": "tool", "content": str(result)})
 
-        # Step 4: feed the tool result back to the model as a new message
-        messages.append(
-            {
-                "role": "tool",
-                "content": str(result),
-            }
-        )
+        # Loop continues — model gets another turn to see these results
+        # and decide whether it needs to call more tools or is done.
 
-    # Step 5: ask the model for its final answer now that it has the tool result
-    final_response = ollama.chat(model=MODEL, messages=messages)
-    final_answer = final_response["message"]["content"]
-
-    print(f"[AGENT] {final_answer}")
-    return final_answer
-
-
+    # Safety valve: if we hit max_steps, stop instead of looping forever
+    print("[AGENT] Reached max steps without a final answer.")
+    return "I wasn't able to complete this in the allotted steps."
+    
 if __name__ == "__main__":
-    run_agent("What tasks do I have?")
+    run_agent("Check my calendar, then create a task whose name includes the exact title of my next event.")

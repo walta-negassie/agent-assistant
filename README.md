@@ -65,8 +65,9 @@ Building this surfaced three genuine engineering problems, not just typos:
 
 **3. A breaking third-party API migration.** Todoist retired their REST v2 API mid-project, returning `410 Gone` on every request. Once switched to the new `api/v1` endpoint, task creation worked but `list_tasks` still broke — the new API wraps results in `{"results": [...], "next_cursor": ...}` instead of returning a bare list, while single-resource endpoints (like creating one task) still return the resource directly. **Fix:** updated the base URL and unwrapped the paginated response correctly, after inspecting the raw response instead of guessing at the fix.
 
-Every tool call is logged to the console (`[TOOL CALL]` / `[TOOL RESULT]`) specifically so issues like these are visible immediately instead of hidden inside a plausible-sounding final answer.
+**4. Speculative tool-call batching with fabricated data.** When I built multi-step tool chaining (e.g. "check my calendar, then create a task using the exact event title"), the model would sometimes return *two* tool calls in a single response — `list_events` and `create_task` together — before it had actually seen the calendar result. With no real data yet, it filled the task content with literal unresolved template syntax (`{{next_event_title}}`), sent that to the real Todoist API, and then told me it had created a task with the correct event title — a hallucinated success claim that directly contradicted its own tool result. **Fix:** changed the agent loop to execute only one tool call per step, forcing the model to see each real result before it's allowed to decide on its next action, and tightened the system prompt to require exact values from tool results rather than paraphrased or placeholder text.
 
+Every tool call is logged to the console (`[STEP N] [TOOL CALL]` / `[TOOL RESULT]`) specifically so issues like these are visible immediately instead of hidden inside a plausible-sounding final answer.
 ## Setup
 
 ### Prerequisites
